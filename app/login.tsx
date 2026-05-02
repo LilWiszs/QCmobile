@@ -2,57 +2,72 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import {
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 
-// Login Screen - Adapted from web Login.jsx
+const API_BASE_URL = 'http://192.168.1.22:8000';
+
 export default function LoginScreen() {
   const router = useRouter();
+
   const [activeTab, setActiveTab] = useState('login');
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
   const [loginErrors, setLoginErrors] = useState<{ email?: string; password?: string }>({});
-  const [signupForm, setSignupForm] = useState({ fullName: '', email: '', password: '', confirmPassword: '' });
-  const [signupErrors, setSignupErrors] = useState<{ fullName?: string; email?: string; password?: string; confirmPassword?: string }>({});
+  const [loading, setLoading] = useState(false);
+
+  const [signupForm, setSignupForm] = useState({
+    fullName: '',
+    email: '',
+    password: '',
+    confirmPassword: '',
+  });
+
+  const [signupErrors, setSignupErrors] = useState<{
+    fullName?: string;
+    email?: string;
+    password?: string;
+    confirmPassword?: string;
+  }>({});
 
   const validateLoginForm = () => {
     const errors: { email?: string; password?: string } = {};
-    if (!loginForm.email) {
-      errors.email = 'Email is required';
-    } else if (!/\S+@\S+\.\S+/.test(loginForm.email)) {
-      errors.email = 'Email is invalid';
-    }
-    if (!loginForm.password) {
-      errors.password = 'Password is required';
-    } else if (loginForm.password.length < 6) {
-      errors.password = 'Password must be at least 6 characters';
-    }
+
+    if (!loginForm.email) errors.email = 'Email/Username is required';
+    if (!loginForm.password) errors.password = 'Password is required';
+
     return errors;
   };
 
   const validateSignupForm = () => {
-    const errors: { fullName?: string; email?: string; password?: string; confirmPassword?: string } = {};
-    if (!signupForm.fullName) {
-      errors.fullName = 'Full name is required';
-    } else if (signupForm.fullName.length < 3) {
-      errors.fullName = 'Full name must be at least 3 characters';
-    }
-    if (!signupForm.email) {
-      errors.email = 'Email is required';
-    } else if (!/\S+@\S+\.\S+/.test(signupForm.email)) {
-      errors.email = 'Email is invalid';
-    }
-    if (!signupForm.password) {
-      errors.password = 'Password is required';
-    } else if (signupForm.password.length < 6) {
-      errors.password = 'Password must be at least 6 characters';
-    }
+    const errors: {
+      fullName?: string;
+      email?: string;
+      password?: string;
+      confirmPassword?: string;
+    } = {};
+
+    if (!signupForm.fullName) errors.fullName = 'Full name is required';
+    if (!signupForm.email) errors.email = 'Email is required';
+    if (!signupForm.password) errors.password = 'Password is required';
     if (signupForm.password !== signupForm.confirmPassword) {
       errors.confirmPassword = 'Passwords do not match';
     }
+
     return errors;
   };
 
   const handleLoginFormChange = (field: string, value: string) => {
     setLoginForm(prev => ({ ...prev, [field]: value }));
+
     if (loginErrors[field as keyof typeof loginErrors]) {
       setLoginErrors(prev => ({ ...prev, [field]: undefined }));
     }
@@ -60,58 +75,138 @@ export default function LoginScreen() {
 
   const handleSignupFormChange = (field: string, value: string) => {
     setSignupForm(prev => ({ ...prev, [field]: value }));
+
     if (signupErrors[field as keyof typeof signupErrors]) {
       setSignupErrors(prev => ({ ...prev, [field]: undefined }));
     }
   };
 
-  const handleLoginSubmit = () => {
+  const handleLoginSubmit = async () => {
     const errors = validateLoginForm();
-    if (Object.keys(errors).length === 0) {
-      Alert.alert('Login Successful', `Welcome, ${loginForm.email}!`, [
-        { text: 'OK', onPress: () => router.replace('/(tabs)') }
+
+    if (Object.keys(errors).length !== 0) {
+      setLoginErrors(errors);
+      Alert.alert('Validation Error', 'Please complete the login form.');
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      const response = await fetch(`${API_BASE_URL}/api-token-auth/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          username: loginForm.email,
+          password: loginForm.password,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        Alert.alert('Login Failed', data.non_field_errors?.[0] || data.detail || 'Invalid username or password.');
+        return;
+      }
+
+      console.log('LOGIN TOKEN:', data.token);
+      (globalThis as any).authToken = data.token;
+
+      Alert.alert('Login Successful', 'Welcome to QuickCare!', [
+        {
+          text: 'OK',
+          onPress: () => router.replace('/(tabs)'),
+        },
       ]);
+
       setLoginForm({ email: '', password: '' });
       setLoginErrors({});
-    } else {
-      setLoginErrors(errors);
-      Alert.alert('Validation Error', 'Please fix the errors in the form');
+    } catch (error: any) {
+      console.log('LOGIN ERROR:', error);
+      Alert.alert('Login Error', error?.message || 'Something went wrong.');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleSignupSubmit = () => {
-    const errors = validateSignupForm();
-    if (Object.keys(errors).length === 0) {
-      Alert.alert('Signup Successful', `Welcome, ${signupForm.fullName}!`, [
-        { text: 'OK', onPress: () => {
-          setSignupForm({ fullName: '', email: '', password: '', confirmPassword: '' });
-          setSignupErrors({});
-          setActiveTab('login');
-        }}
-      ]);
-    } else {
-      setSignupErrors(errors);
-      Alert.alert('Validation Error', 'Please fix the errors in the form');
+const handleSignupSubmit = async () => {
+  const errors = validateSignupForm();
+
+  if (Object.keys(errors).length !== 0) {
+    setSignupErrors(errors);
+    Alert.alert('Validation Error', 'Please fix the errors in the form');
+    return;
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/register/`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        username: signupForm.email,
+        email: signupForm.email,
+        password: signupForm.password,
+        first_name: signupForm.fullName,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      Alert.alert(
+        'Signup Failed',
+        data.username?.[0] ||
+          data.email?.[0] ||
+          data.password?.[0] ||
+          data.detail ||
+          'Unable to create account.'
+      );
+      return;
     }
-  };
+
+    Alert.alert('Signup Successful', 'Account created. You may now login.', [
+      {
+        text: 'OK',
+        onPress: () => {
+          setSignupForm({
+            fullName: '',
+            email: '',
+            password: '',
+            confirmPassword: '',
+          });
+          setSignupErrors({});
+          setLoginForm({
+            email: signupForm.email,
+            password: '',
+          });
+          setActiveTab('login');
+        },
+      },
+    ]);
+  } catch (error: any) {
+    Alert.alert('Connection Error', error?.message || 'Cannot connect to backend server.');
+  }
+};
 
   return (
     <ThemedView style={styles.container}>
-      <KeyboardAvoidingView 
+      <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
       >
         <ScrollView showsVerticalScrollIndicator={false}>
-          {/* Logo/Header */}
           <View style={styles.header}>
             <Text style={styles.logo}>🏥</Text>
             <ThemedText type="title" style={styles.appTitle}>QuickCare</ThemedText>
             <ThemedText style={styles.appSubtitle}>Mobile Healthcare Management</ThemedText>
           </View>
 
-          {/* Auth Tabs */}
           <View style={styles.tabsContainer}>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[styles.tab, activeTab === 'login' && styles.tabActive]}
               onPress={() => setActiveTab('login')}
             >
@@ -119,7 +214,8 @@ export default function LoginScreen() {
                 Login
               </Text>
             </TouchableOpacity>
-            <TouchableOpacity 
+
+            <TouchableOpacity
               style={[styles.tab, activeTab === 'signup' && styles.tabActive]}
               onPress={() => setActiveTab('signup')}
             >
@@ -129,20 +225,18 @@ export default function LoginScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Login Form */}
           {activeTab === 'login' && (
             <View style={styles.formContainer}>
               <ThemedText type="subtitle" style={styles.formTitle}>Admin Login</ThemedText>
-              
+
               <View style={styles.inputContainer}>
-                <Text style={styles.inputLabel}>Email</Text>
+                <Text style={styles.inputLabel}>Username / Email</Text>
                 <TextInput
                   style={[styles.input, loginErrors.email && styles.inputError]}
-                  placeholder="Enter your email"
+                  placeholder="Enter username or email"
                   placeholderTextColor="#999"
                   value={loginForm.email}
                   onChangeText={(text) => handleLoginFormChange('email', text)}
-                  keyboardType="email-address"
                   autoCapitalize="none"
                 />
                 {loginErrors.email && <Text style={styles.errorText}>{loginErrors.email}</Text>}
@@ -161,21 +255,22 @@ export default function LoginScreen() {
                 {loginErrors.password && <Text style={styles.errorText}>{loginErrors.password}</Text>}
               </View>
 
-              <TouchableOpacity style={styles.submitButton} onPress={handleLoginSubmit}>
-                <Text style={styles.submitButtonText}>Login</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.forgotButton}>
-                <Text style={styles.forgotText}>Forgot Password?</Text>
+              <TouchableOpacity
+                style={[styles.submitButton, loading && styles.disabledButton]}
+                onPress={handleLoginSubmit}
+                disabled={loading}
+              >
+                <Text style={styles.submitButtonText}>
+                  {loading ? 'Logging in...' : 'Login'}
+                </Text>
               </TouchableOpacity>
             </View>
           )}
 
-          {/* Signup Form */}
           {activeTab === 'signup' && (
             <View style={styles.formContainer}>
               <ThemedText type="subtitle" style={styles.formTitle}>Create Admin Account</ThemedText>
-              
+
               <View style={styles.inputContainer}>
                 <Text style={styles.inputLabel}>Full Name</Text>
                 <TextInput
@@ -241,12 +336,8 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  keyboardView: {
-    flex: 1,
-  },
+  container: { flex: 1 },
+  keyboardView: { flex: 1 },
   header: {
     alignItems: 'center',
     paddingTop: 60,
@@ -329,18 +420,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 10,
   },
+  disabledButton: {
+    opacity: 0.6,
+  },
   submitButtonText: {
     color: '#fff',
     fontSize: 18,
     fontWeight: '600',
   },
-  forgotButton: {
-    alignItems: 'center',
-    marginTop: 16,
-  },
-  forgotText: {
-    color: '#007AFF',
-    fontSize: 14,
-  },
 });
-

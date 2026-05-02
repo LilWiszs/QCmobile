@@ -4,6 +4,7 @@ import { useAppTheme } from '@/contexts/AppThemeContext';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   ScrollView,
   StyleSheet,
@@ -12,6 +13,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+
+const API_BASE_URL = 'http://192.168.1.22:8000';
 
 type Patient = {
   id: string;
@@ -42,26 +45,10 @@ export default function PatientsScreen() {
   const { colors } = useAppTheme();
   const { patientId } = useLocalSearchParams<{ patientId?: string }>();
 
-  const [selectedPatientId, setSelectedPatientId] = useState<string | null>(patientId ?? 'P-1001');
-
-  const [recentPatients] = useState<Patient[]>([
-    {
-      id: 'P-1001',
-      name: 'John Doe',
-      age: 45,
-      sex: 'Male',
-      contact: '09123456789',
-      registeredAt: '09:00 AM',
-    },
-    {
-      id: 'P-1002',
-      name: 'Jane Smith',
-      age: 32,
-      sex: 'Female',
-      contact: '09987654321',
-      registeredAt: '09:15 AM',
-    },
-  ]);
+  const [selectedPatientId, setSelectedPatientId] = useState<string | null>(patientId ?? null);
+  const [recentPatients, setRecentPatients] = useState<Patient[]>([]);
+  const [loadingPatients, setLoadingPatients] = useState(true);
+  const [patientError, setPatientError] = useState<string | null>(null);
 
   const [vitals, setVitals] = useState<Vitals>({
     temperature: '36.8',
@@ -73,6 +60,53 @@ export default function PatientsScreen() {
   });
 
   const [vitalErrors, setVitalErrors] = useState<VitalErrors>({});
+
+  const fetchPatients = async () => {
+    try {
+      setLoadingPatients(true);
+      setPatientError(null);
+
+      const token = (globalThis as any).authToken;
+
+      const response = await fetch(`${API_BASE_URL}/api/patients/`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Token ${token}`,
+        },
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setPatientError(data.detail || 'Unable to load patients.');
+        return;
+      }
+
+      const formattedPatients: Patient[] = data.map((item: any) => ({
+        id: String(item.id ?? item.patient_id ?? ''),
+        name: item.name ?? item.full_name ?? item.patient_name ?? 'Unnamed Patient',
+        age: Number(item.age ?? 0),
+        sex: item.sex ?? item.gender ?? 'N/A',
+        contact: item.contact ?? item.phone ?? item.contact_number ?? 'N/A',
+        registeredAt: item.registered_at ?? item.created_at ?? 'N/A',
+      }));
+
+      setRecentPatients(formattedPatients);
+
+      if (!selectedPatientId && formattedPatients.length > 0) {
+        setSelectedPatientId(formattedPatients[0].id);
+      }
+    } catch (error: any) {
+      setPatientError(error?.message || 'Cannot connect to backend server.');
+    } finally {
+      setLoadingPatients(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchPatients();
+  }, []);
 
   useEffect(() => {
     if (patientId) setSelectedPatientId(patientId);
@@ -113,7 +147,7 @@ export default function PatientsScreen() {
     return errors;
   };
 
-  const handleVitalsSubmit = () => {
+  const handleVitalsSubmit = async () => {
     const errors = validateVitals();
 
     if (Object.keys(errors).length > 0) {
@@ -122,16 +156,42 @@ export default function PatientsScreen() {
       return;
     }
 
-    Alert.alert('Vitals Updated', `Patient vitals updated for ${patient?.name ?? 'patient'}.`);
-    setVitalErrors({});
+    try {
+      const token = (globalThis as any).authToken;
+
+      const response = await fetch(`${API_BASE_URL}/api/vitals/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Token ${token}`,
+        },
+        body: JSON.stringify({
+          patient: patient?.id,
+          temperature: vitals.temperature,
+          blood_pressure: vitals.bloodPressure,
+          pulse_rate: vitals.pulseRate,
+          weight: vitals.weight,
+          height: vitals.height,
+          status: vitals.status,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        Alert.alert('Error', data.detail || 'Failed to update vitals.');
+        return;
+      }
+
+      Alert.alert('Vitals Updated', `Patient vitals updated for ${patient?.name ?? 'patient'}.`);
+      setVitalErrors({});
+    } catch (error: any) {
+      Alert.alert('Connection Error', error?.message || 'Cannot connect to backend server.');
+    }
   };
 
   const handleBackToDashboard = () => {
     router.push('/');
-  };
-
-  const handleSelectSamplePatient = () => {
-    setSelectedPatientId('P-1001');
   };
 
   const statusColors = useMemo(() => {
@@ -141,6 +201,27 @@ export default function PatientsScreen() {
     return { bg: '#e9f8ef', text: colors.success };
   }, [vitals.status, colors.danger, colors.warning, colors.success]);
 
+  if (loadingPatients) {
+    return (
+      <ThemedView style={[styles.centerContainer, { backgroundColor: colors.background }]}>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={[styles.loadingText, { color: colors.text }]}>Loading patients...</Text>
+      </ThemedView>
+    );
+  }
+
+  if (patientError) {
+    return (
+      <ThemedView style={[styles.centerContainer, { backgroundColor: colors.background }]}>
+        <Text style={[styles.errorTitle, { color: colors.danger }]}>Failed to load patients</Text>
+        <Text style={[styles.emptyState, { color: colors.subText }]}>{patientError}</Text>
+        <TouchableOpacity style={[styles.selectButton, { backgroundColor: colors.primary }]} onPress={fetchPatients}>
+          <Text style={styles.selectButtonText}>Try Again</Text>
+        </TouchableOpacity>
+      </ThemedView>
+    );
+  }
+
   return (
     <ThemedView style={[styles.container, { backgroundColor: colors.background }]}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
@@ -148,6 +229,38 @@ export default function PatientsScreen() {
           <TouchableOpacity style={styles.backButton} onPress={handleBackToDashboard}>
             <Text style={[styles.backButtonText, { color: colors.primary }]}>← Back to Dashboard</Text>
           </TouchableOpacity>
+
+          <View style={[styles.card, { backgroundColor: colors.card }]}>
+            <ThemedText type="subtitle" style={[styles.cardTitle, { color: colors.text }]}>
+              Patient List
+            </ThemedText>
+
+            {recentPatients.length === 0 ? (
+              <Text style={[styles.emptyState, { color: colors.subText }]}>No patients found from API.</Text>
+            ) : (
+              recentPatients.map((item) => (
+                <TouchableOpacity
+                  key={item.id}
+                  style={[
+                    styles.patientButton,
+                    {
+                      backgroundColor: selectedPatientId === item.id ? colors.primary : colors.muted,
+                    },
+                  ]}
+                  onPress={() => setSelectedPatientId(item.id)}
+                >
+                  <Text
+                    style={[
+                      styles.patientButtonText,
+                      { color: selectedPatientId === item.id ? '#fff' : colors.text },
+                    ]}
+                  >
+                    {item.name}
+                  </Text>
+                </TouchableOpacity>
+              ))
+            )}
+          </View>
 
           {selectedPatientId && patient ? (
             <>
@@ -273,15 +386,8 @@ export default function PatientsScreen() {
           ) : (
             <View style={[styles.card, { backgroundColor: colors.card }]}>
               <Text style={[styles.emptyState, { color: colors.subText }]}>
-                Please select a patient from the dashboard to view details
+                No patient selected.
               </Text>
-
-              <TouchableOpacity
-                style={[styles.selectButton, { backgroundColor: colors.primary }]}
-                onPress={handleSelectSamplePatient}
-              >
-                <Text style={styles.selectButtonText}>Select Sample Patient</Text>
-              </TouchableOpacity>
             </View>
           )}
         </View>
@@ -292,6 +398,22 @@ export default function PatientsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  errorTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
   scrollContent: { paddingBottom: 24 },
   pageContent: { paddingHorizontal: 16, paddingTop: 20, gap: 16 },
   backButton: { alignSelf: 'flex-start', paddingVertical: 8 },
@@ -306,6 +428,15 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   cardTitle: { fontSize: 20, fontWeight: '700', marginBottom: 14 },
+  patientButton: {
+    padding: 14,
+    borderRadius: 12,
+    marginBottom: 10,
+  },
+  patientButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
   patientDetailsGrid: { gap: 12 },
   detailItem: { borderRadius: 12, padding: 12 },
   detailLabel: { fontSize: 12, fontWeight: '700', marginBottom: 4 },
@@ -337,7 +468,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   submitButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  emptyState: { fontSize: 14, lineHeight: 20, marginBottom: 16 },
-  selectButton: { paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
+  emptyState: { fontSize: 14, lineHeight: 20, marginBottom: 16, textAlign: 'center' },
+  selectButton: { paddingVertical: 14, paddingHorizontal: 20, borderRadius: 12, alignItems: 'center' },
   selectButtonText: { color: '#fff', fontSize: 15, fontWeight: '700' },
 });

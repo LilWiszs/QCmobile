@@ -2,8 +2,9 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { useAppTheme } from '@/contexts/AppThemeContext';
 import { router } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   ScrollView,
   StyleSheet,
@@ -13,8 +14,10 @@ import {
   View,
 } from 'react-native';
 
+const API_BASE_URL = 'http://192.168.1.22:8000';
+
 type PatientForm = {
-  id: string;
+  patient_id: string;
   name: string;
   age: string;
   sex: string;
@@ -22,7 +25,7 @@ type PatientForm = {
 };
 
 type PatientErrors = {
-  id?: string;
+  patient_id?: string;
   name?: string;
   age?: string;
   contact?: string;
@@ -30,6 +33,7 @@ type PatientErrors = {
 
 type RecentPatient = {
   id: string;
+  patient_id: string;
   name: string;
   age: number;
   sex: string;
@@ -42,13 +46,10 @@ export default function DashboardScreen() {
 
   const [queueNumber] = useState(12);
   const [queueStatus] = useState('Active');
-
-  const [vitals] = useState({
-    status: 'Stable',
-  });
+  const [vitals] = useState({ status: 'Stable' });
 
   const [patient, setPatient] = useState<PatientForm>({
-    id: '',
+    patient_id: '',
     name: '',
     age: '',
     sex: 'Male',
@@ -56,25 +57,53 @@ export default function DashboardScreen() {
   });
 
   const [patientErrors, setPatientErrors] = useState<PatientErrors>({});
+  const [recentPatients, setRecentPatients] = useState<RecentPatient[]>([]);
+  const [loadingPatients, setLoadingPatients] = useState(true);
+  const [savingPatient, setSavingPatient] = useState(false);
 
-  const [recentPatients, setRecentPatients] = useState<RecentPatient[]>([
-    {
-      id: 'P-1001',
-      name: 'John Doe',
-      age: 45,
-      sex: 'Male',
-      contact: '09123456789',
-      registeredAt: '09:00 AM',
-    },
-    {
-      id: 'P-1002',
-      name: 'Jane Smith',
-      age: 32,
-      sex: 'Female',
-      contact: '09987654321',
-      registeredAt: '09:15 AM',
-    },
-  ]);
+  const formatPatients = (data: any[]): RecentPatient[] => {
+    return data.map((item: any) => ({
+      id: String(item.id),
+      patient_id: item.patient_id ?? '',
+      name: item.name ?? 'Unnamed Patient',
+      age: Number(item.age ?? 0),
+      sex: item.sex ?? 'N/A',
+      contact: item.contact ?? 'N/A',
+      registeredAt: item.registered_at ?? 'N/A',
+    }));
+  };
+
+  const fetchPatients = async () => {
+    try {
+      setLoadingPatients(true);
+
+      const token = (globalThis as any).authToken;
+
+      const response = await fetch(`${API_BASE_URL}/api/patients/`, {
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Token ${token}`,
+        },
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        Alert.alert('Error', data.detail || 'Unable to load patients.');
+        return;
+      }
+
+      setRecentPatients(formatPatients(data));
+    } catch (error: any) {
+      Alert.alert('Connection Error', error?.message || 'Cannot connect to backend.');
+    } finally {
+      setLoadingPatients(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchPatients();
+  }, []);
 
   const stats = useMemo(
     () => [
@@ -97,7 +126,7 @@ export default function DashboardScreen() {
   const validatePatient = () => {
     const errors: PatientErrors = {};
 
-    if (!patient.id.trim()) errors.id = 'Patient ID is required';
+    if (!patient.patient_id.trim()) errors.patient_id = 'Patient ID is required';
     if (!patient.name.trim()) errors.name = 'Full name is required';
     if (!patient.age.trim()) errors.age = 'Age is required';
 
@@ -110,7 +139,7 @@ export default function DashboardScreen() {
     return errors;
   };
 
-  const handleRegisterPatient = () => {
+  const handleRegisterPatient = async () => {
     const errors = validatePatient();
 
     if (Object.keys(errors).length > 0) {
@@ -119,31 +148,59 @@ export default function DashboardScreen() {
       return;
     }
 
-    const registeredAt = new Date().toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-    });
+    try {
+      setSavingPatient(true);
 
-    const newPatient: RecentPatient = {
-      id: patient.id,
-      name: patient.name,
-      age: Number(patient.age),
-      sex: patient.sex,
-      contact: patient.contact,
-      registeredAt,
-    };
+      const token = (globalThis as any).authToken;
 
-    setRecentPatients((prev) => [newPatient, ...prev]);
-    setPatientErrors({});
-    setPatient({
-      id: '',
-      name: '',
-      age: '',
-      sex: 'Male',
-      contact: '',
-    });
+      const response = await fetch(`${API_BASE_URL}/api/patients/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Token ${token}`,
+        },
+        body: JSON.stringify({
+          patient_id: patient.patient_id,
+          name: patient.name,
+          age: Number(patient.age),
+          sex: patient.sex,
+          contact: patient.contact,
+        }),
+      });
 
-    Alert.alert('Patient Registered', `${newPatient.name} has been added successfully.`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        Alert.alert(
+          'Add Patient Failed',
+          data.patient_id?.[0] ||
+            data.name?.[0] ||
+            data.age?.[0] ||
+            data.contact?.[0] ||
+            data.detail ||
+            'Unable to add patient.'
+        );
+        return;
+      }
+
+      const newPatient = formatPatients([data])[0];
+
+      setRecentPatients((prev) => [newPatient, ...prev]);
+      setPatientErrors({});
+      setPatient({
+        patient_id: '',
+        name: '',
+        age: '',
+        sex: 'Male',
+        contact: '',
+      });
+
+      Alert.alert('Patient Registered', `${newPatient.name} has been saved to the backend.`);
+    } catch (error: any) {
+      Alert.alert('Connection Error', error?.message || 'Cannot connect to backend.');
+    } finally {
+      setSavingPatient(false);
+    }
   };
 
   const handleViewPatient = (id: string) => {
@@ -154,7 +211,7 @@ export default function DashboardScreen() {
   };
 
   const handleRemovePatient = (id: string) => {
-    Alert.alert('Remove Patient', 'Are you sure you want to remove this patient?', [
+    Alert.alert('Remove Patient', 'This only removes the patient from this mobile list, not the backend.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Remove',
@@ -204,14 +261,14 @@ export default function DashboardScreen() {
                 style={[
                   styles.input,
                   { backgroundColor: colors.input, color: colors.text },
-                  patientErrors.id && styles.inputError,
+                  patientErrors.patient_id && styles.inputError,
                 ]}
-                value={patient.id}
-                onChangeText={(text) => handlePatientChange('id', text)}
+                value={patient.patient_id}
+                onChangeText={(text) => handlePatientChange('patient_id', text)}
                 placeholder="e.g., QC-1023"
                 placeholderTextColor={colors.subText}
               />
-              {patientErrors.id ? <Text style={styles.errorMessage}>{patientErrors.id}</Text> : null}
+              {patientErrors.patient_id ? <Text style={styles.errorMessage}>{patientErrors.patient_id}</Text> : null}
             </View>
 
             <View style={styles.formGroup}>
@@ -293,19 +350,33 @@ export default function DashboardScreen() {
             </View>
 
             <TouchableOpacity
-              style={[styles.submitButton, { backgroundColor: colors.primary }]}
+              style={[styles.submitButton, { backgroundColor: colors.primary }, savingPatient && styles.disabledButton]}
               onPress={handleRegisterPatient}
+              disabled={savingPatient}
             >
-              <Text style={styles.submitButtonText}>Register Patient</Text>
+              <Text style={styles.submitButtonText}>
+                {savingPatient ? 'Saving...' : 'Register Patient'}
+              </Text>
             </TouchableOpacity>
           </View>
 
           <View style={[styles.card, { backgroundColor: colors.card }]}>
-            <ThemedText type="subtitle" style={[styles.cardTitle, { color: colors.text }]}>
-              Recently Registered Patients
-            </ThemedText>
+            <View style={styles.listHeader}>
+              <ThemedText type="subtitle" style={[styles.cardTitle, { color: colors.text }]}>
+                Recently Registered Patients
+              </ThemedText>
 
-            {recentPatients.length > 0 ? (
+              <TouchableOpacity onPress={fetchPatients}>
+                <Text style={[styles.refreshText, { color: colors.primary }]}>Refresh</Text>
+              </TouchableOpacity>
+            </View>
+
+            {loadingPatients ? (
+              <View style={styles.loadingRow}>
+                <ActivityIndicator color={colors.primary} />
+                <Text style={[styles.emptyState, { color: colors.subText }]}>Loading patients...</Text>
+              </View>
+            ) : recentPatients.length > 0 ? (
               <View style={styles.patientList}>
                 {recentPatients.map((person) => (
                   <View
@@ -318,7 +389,7 @@ export default function DashboardScreen() {
                     <View style={styles.patientInfo}>
                       <Text style={[styles.patientName, { color: colors.text }]}>{person.name}</Text>
                       <Text style={[styles.patientTime, { color: colors.subText }]}>
-                        {person.registeredAt}
+                        ID: {person.patient_id} • {person.registeredAt}
                       </Text>
                     </View>
 
@@ -402,7 +473,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 4,
   },
+  disabledButton: { opacity: 0.6 },
   submitButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  listHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  refreshText: {
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 14,
+  },
+  loadingRow: {
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'center',
+  },
   patientList: { gap: 12 },
   patientItem: {
     borderRadius: 14,
